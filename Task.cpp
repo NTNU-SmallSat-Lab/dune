@@ -58,6 +58,8 @@ namespace Vision
       AOI aoi;
       //! Auto Gain
       bool auto_gain;
+      //! Gain boost
+      bool gain_boost;
       //! Gain
       int gain;
       //! Exposure time
@@ -138,6 +140,10 @@ namespace Vision
         .defaultValue("false")
         .description("Enable Auto Gain");
 
+        param("Gain Boost", m_args.gain_boost)
+        .defaultValue("false")
+        .description("Enable Gain Boost");
+
         param("Gain", m_args.gain)
         .defaultValue("50")
         .units(Units::Percentage)
@@ -183,7 +189,7 @@ namespace Vision
       onResourceAcquisition(void)
       {
         m_capture = new CaptureUeye(this, m_args.aoi, m_cam, m_args.fps);
-        m_capture->setGain(m_args.auto_gain, m_args.gain);
+        m_capture->setGain(m_args.auto_gain, m_args.gain_boost, m_args.gain);
         m_capture->setExposure(m_args.exposure);
       }
 
@@ -252,7 +258,7 @@ namespace Vision
       void
       saveImage(Frame* frame)
       {
-        Path file = m_log_dir / String::str("%0.4f_%07llu_%04d.bmp", frame->timestamp, frame->seqNum, frame->gainFactor);
+        Path file = m_log_dir / String::str("%0.4f_%07llu_%04d_%d.bmp", frame->timestamp, frame->seqNum, frame->gainFactor, m_args.gain_boost ? 1 : 0);
 
         const size_t cSize = strlen(file.c_str())+1;
         std::wstring ws( cSize, L'#' );
@@ -327,7 +333,7 @@ namespace Vision
               if (m_calib_gain > 100)
                 m_calib_gain = 0;
 
-              m_capture->setGain(false, m_calib_gain);
+              m_capture->setGain(false, false, m_calib_gain);
               m_calib_time = now;
             }
           }

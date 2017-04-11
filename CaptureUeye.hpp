@@ -152,6 +152,14 @@ namespace Vision
       void
       setFPS(double fps)
       {
+        // Set the pixel clock. Higher pixel clock will enable higher FPS.
+        UINT nPixelClockDefault = 140;
+        int tmp = is_PixelClock(m_cam, IS_PIXELCLOCK_CMD_SET,
+            (void*)&nPixelClockDefault,
+            sizeof(nPixelClockDefault));
+        if (tmp != IS_SUCCESS)
+          m_task->err("PixelClock unsuccessful. Error %d", tmp);
+        
         // Set target FPS
         double newFPS, fpsWish = fps;
         is_SetFrameRate(m_cam, fpsWish, &newFPS);
@@ -168,7 +176,7 @@ namespace Vision
       }
 
       void
-      setGain(bool autogain, int gain)
+      setGain(bool autogain, bool gainboost, int gain)
       {
         //Enable or disable auto gain control:
         double param = autogain ? 1 : 0;
@@ -177,6 +185,14 @@ namespace Vision
           m_task->debug("%s Auto Gain.", autogain ? "Enabled" : "Disabled");
         else
           m_task->err("%s Auto Gain unsuccessful. Error %d", autogain ? "Enable" : "Disable", ret);
+        
+        //Enable or disable gain boost:
+        int param_int = gainboost ? IS_SET_GAINBOOST_ON : IS_SET_GAINBOOST_OFF;
+        ret = is_SetGainBoost (m_cam, param_int);
+        if (ret == IS_SUCCESS)
+          m_task->debug("%s Gain Boost.", gainboost ? "Enabled" : "Disabled");
+        else
+          m_task->err("%s Gain Boost unsuccessful. Error %d", gainboost ? "Enable" : "Disable", ret);
 
         //Set gain if not auto:
         ret = is_SetHardwareGain (m_cam, gain, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
@@ -270,15 +286,6 @@ namespace Vision
 
         // Set color mode.
         is_SetColorMode(m_cam, IS_CM_SENSOR_RAW8);
-
-        // Set the pixel clock. This is capped at 30. Higher pixel clock
-        // will enable higher FPS.
-        UINT nPixelClockDefault = 20;
-        tmp = is_PixelClock(m_cam, IS_PIXELCLOCK_CMD_SET,
-            (void*)&nPixelClockDefault,
-            sizeof(nPixelClockDefault));
-        if (tmp != IS_SUCCESS)
-          m_task->err("PixelClock unsuccessful. Error %d", tmp);
 
         setAOI(m_aoi);
         setFPS(m_fps);
