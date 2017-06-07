@@ -36,6 +36,15 @@
 // Local headers.
 #include <Vision/UEye/CaptureUeye.hpp>
 
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
+
+#if defined(DUNE_SYS_HAS_OPENCV2_IMGCODECS_HPP)
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/core/mat.hpp>
+#endif
+
 using DUNE_NAMESPACES;
 
 namespace Vision
@@ -46,6 +55,7 @@ namespace Vision
   namespace UEye
   {
     //! %Task arguments.
+
     struct Arguments
     {
       //! Camera ID
@@ -68,10 +78,13 @@ namespace Vision
       bool calib_mode;
       //! Calibration delta
       float calib_delta;
+      //! Binning factor
+      int binning;
     };
 
     //! Device driver task.
-    struct Task: public DUNE::Tasks::Task
+
+    struct Task:public DUNE::Tasks::Task
     {
       //! %Frame width. Unclear if 640 or 960
       static const unsigned c_width = 640;
@@ -91,87 +104,94 @@ namespace Vision
       int m_calib_gain;
       //! Time of last calibration gain change
       double m_calib_time;
-
+      //! OpenCV frame.
+      cv::Mat m_image_cv;
       Task(const std::string& name, Tasks::Context& ctx):
-        Tasks::Task(name, ctx),
-        m_log_dir(ctx.dir_log),
-        m_cam(1),
-        m_capture(NULL),
-        m_frame(NULL),
-        m_calib_gain(0),
-        m_calib_time(0.0)
+      Tasks::Task(name, ctx),
+      m_log_dir(ctx.dir_log),
+      m_cam(1),
+      m_capture(NULL),
+      m_frame(NULL),
+      m_calib_gain(0),
+      m_calib_time(0.0)
       {
         // Retrieve configuration values.
         paramActive(Tasks::Parameter::SCOPE_GLOBAL,
                     Tasks::Parameter::VISIBILITY_USER);
 
         param("Camera ID", m_args.cam_id)
-        .defaultValue("1")
-        .minimumValue("1")
-        .description("ID of camera to open");
+                .defaultValue("1")
+                .minimumValue("1")
+                .description("ID of camera to open");
 
         param("Frames Per Second", m_args.fps)
-        .defaultValue("30")
-        .minimumValue("0")
-        .maximumValue("75")
-        .description("Frames per second");
+                .defaultValue("30")
+                .minimumValue("0")
+                .maximumValue("75")
+                .description("Frames per second");
 
         param("AOI - X", m_args.aoi.x)
-        .defaultValue("0")
-        .minimumValue("0")
-        .description("X coordinate of upper left corner of AOI");
+                .defaultValue("0")
+                .minimumValue("0")
+                .description("X coordinate of upper left corner of AOI");
 
         param("AOI - Y", m_args.aoi.y)
-        .defaultValue("0")
-        .minimumValue("0")
-        .description("Y coordinate of upper left corner of AOI");
+                .defaultValue("0")
+                .minimumValue("0")
+                .description("Y coordinate of upper left corner of AOI");
 
         param("AOI - Width", m_args.aoi.width)
-        .defaultValue("640")
-        .minimumValue("0")
-        .description("Width of AOI");
+                .defaultValue("640")
+                .minimumValue("0")
+                .description("Width of AOI");
 
         param("AOI - Height", m_args.aoi.height)
-        .defaultValue("480")
-        .minimumValue("0")
-        .description("Height of AOI");
+                .defaultValue("480")
+                .minimumValue("0")
+                .description("Height of AOI");
 
         param("Auto Gain", m_args.auto_gain)
-        .defaultValue("false")
-        .description("Enable Auto Gain");
+                .defaultValue("false")
+                .description("Enable Auto Gain");
 
         param("Gain Boost", m_args.gain_boost)
-        .defaultValue("false")
-        .description("Enable Gain Boost");
+                .defaultValue("false")
+                .description("Enable Gain Boost");
 
         param("Gain", m_args.gain)
-        .defaultValue("50")
-        .units(Units::Percentage)
-        .minimumValue("0")
-        .maximumValue("100")
-        .description("Sensor Gain");
+                .defaultValue("50")
+                .units(Units::Percentage)
+                .minimumValue("0")
+                .maximumValue("100")
+                .description("Sensor Gain");
 
         param("Exposure", m_args.exposure)
-        .defaultValue("4")
-        .units(Units::Millisecond)
-        .minimumValue("1")
-        .maximumValue("20")
-        .description("Exposure Time");
+                .defaultValue("4")
+                .units(Units::Millisecond)
+                .minimumValue("1")
+                .maximumValue("20")
+                .description("Exposure Time");
 
         param("Log Dir", m_args.log_dir)
-        .defaultValue("")
-        .description("Path to Log Directory");
+                .defaultValue("")
+                .description("Path to Log Directory");
 
         param("Calibration Mode", m_args.calib_mode)
-        .defaultValue("false")
-        .description("Enable calibration mode");
+                .defaultValue("false")
+                .description("Enable calibration mode");
 
         param("Calibration Delta", m_args.calib_delta)
-        .defaultValue("1.0")
-        .units(Units::Second)
-        .minimumValue("0.1")
-        .maximumValue("10.0")
-        .description("Time interval for each gain in calibration mode");
+                .defaultValue("1.0")
+                .units(Units::Second)
+                .minimumValue("0.1")
+                .maximumValue("10.0")
+                .description("Time interval for each gain in calibration mode");
+
+        param("Binning Factor", m_args.binning)
+                .defaultValue("1")
+                .minimumValue("1")
+                .maximumValue("20")
+                .description("Binning factor in the horizontal axis");
 
         bind<IMC::LoggingControl>(this);
       }
@@ -216,7 +236,6 @@ namespace Vision
       {
         setEntityState(IMC::EntityState::ESTA_NORMAL, Status::CODE_IDLE);
       }
-
       void
       consume(const IMC::LoggingControl* msg)
       {
@@ -229,7 +248,6 @@ namespace Vision
           m_log_dir.create();
         }
       }
-
       void
       onRequestActivation(void)
       {
@@ -238,7 +256,6 @@ namespace Vision
         dispatch(log_ctl);
         activate();
       }
-
       void
       onActivation(void)
       {
@@ -246,7 +263,6 @@ namespace Vision
         setEntityState(IMC::EntityState::ESTA_NORMAL, Status::CODE_ACTIVE);
         m_capture->start();
       }
-
       void
       onDeactivation(void)
       {
@@ -258,27 +274,29 @@ namespace Vision
       void
       saveImage(Frame* frame)
       {
-        Path file = m_log_dir / String::str("%0.4f_%07llu_%04d_%d.bmp", frame->timestamp, frame->seqNum, frame->gainFactor, m_args.gain_boost ? 1 : 0);
+        Path file = m_log_dir / String::str("%07llu_%0.4f_%04d_%d.png", frame->seqNum, frame->timestamp, frame->gainFactor, m_args.gain_boost ? 1 : 0);
 
-        const size_t cSize = strlen(file.c_str())+1;
-        std::wstring ws( cSize, L'#' );
-        mbstowcs( &ws[0], file.c_str(), cSize );
+        m_image_cv = cv::Mat(m_args.aoi.height, m_args.aoi.width, CV_16UC1);
+        std::memcpy(m_image_cv.ptr(), frame->data, m_args.aoi.height * m_args.aoi.width * 2);
 
-        IMAGE_FILE_PARAMS imageFileParams;
+        cv::flip(m_image_cv, m_image_cv, 0);
 
-        imageFileParams.pwchFileName = const_cast<wchar_t*>(ws.c_str());
-        imageFileParams.pnImageID = &frame->id;
-        imageFileParams.ppcImageMem = &frame->data;
-        // File format: JPEG, PNG or BMP
-        // Using BMP for uncompressed data
-        imageFileParams.nFileType = IS_IMG_BMP;
+        std::vector<int> compression_params;
+        compression_params.push_back(cv::IMWRITE_PNG_COMPRESSION);
+        compression_params.push_back(0);
+        
+        if (m_args.binning > 1)
+        {
+          cv::Mat image_cv_bin = cv::Mat(m_args.aoi.height, m_args.aoi.width/m_args.binning, CV_16UC1);
+          m_image_cv *= 2^4;
+          
+          cv::resize(m_image_cv, image_cv_bin, image_cv_bin.size(), 0, 0, cv::INTER_LINEAR);
+          cv::imwrite(file.c_str(), image_cv_bin, compression_params);
+          return;
+        }
 
-        int ret = is_ImageFile(m_cam, IS_IMAGE_FILE_CMD_SAVE, (void*)&imageFileParams, sizeof(imageFileParams));
-
-        if (ret != IS_SUCCESS)
-          err("Image write unsuccessful. Error %d", ret);
+        cv::imwrite(file.c_str(), m_image_cv, compression_params);
       }
-
       void
       stopCapture(void)
       {
@@ -303,7 +321,6 @@ namespace Vision
         if (m_capture->isRunning())
           m_capture->stopAndJoin();
       }
-
       void
       onMain(void)
       {

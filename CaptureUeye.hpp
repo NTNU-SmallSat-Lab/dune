@@ -84,6 +84,8 @@ namespace Vision
         m_fps(fps),
         m_read(0),
         m_write(0),
+        m_gain(0),
+        m_gain_auto(false),        
         m_lastTS(0)
       {
         m_imgMems = new char*[c_buf_len];
@@ -135,7 +137,7 @@ namespace Vision
 
         for (unsigned i = 0; i < c_buf_len; i++)
         {
-          tmp = is_AllocImageMem(m_cam, m_aoi.width, m_aoi.height, 8, &m_ppcImgMem, &pid);
+          tmp = is_AllocImageMem(m_cam, m_aoi.width, m_aoi.height, 12, &m_ppcImgMem, &pid);
 
           // Store pointer and picture ID for this memory
           m_imgMems[i] = m_ppcImgMem;
@@ -153,7 +155,7 @@ namespace Vision
       setFPS(double fps)
       {
         // Set the pixel clock. Higher pixel clock will enable higher FPS.
-        UINT nPixelClockDefault = 140;
+        UINT nPixelClockDefault = 100;
         int tmp = is_PixelClock(m_cam, IS_PIXELCLOCK_CMD_SET,
             (void*)&nPixelClockDefault,
             sizeof(nPixelClockDefault));
@@ -178,6 +180,8 @@ namespace Vision
       void
       setGain(bool autogain, bool gainboost, int gain)
       {
+        m_gain = gain;
+        m_gain_auto = autogain;
         //Enable or disable auto gain control:
         double param = autogain ? 1 : 0;
         int ret = is_SetAutoParameter (m_cam, IS_SET_ENABLE_AUTO_GAIN, &param, 0);
@@ -250,6 +254,10 @@ namespace Vision
       unsigned m_read, m_write;
       //! Lookup table for gain factors
       int m_gains[101];
+      //! Current gain factor
+      int m_gain;
+      //! Current auto gain setting
+      bool m_gain_auto;
       //! Last timestamp
       unsigned long long m_lastTS;
 
@@ -263,14 +271,14 @@ namespace Vision
         // Starts the driver and establishes the connection to the camera
         tmp = is_InitCamera(&m_cam, NULL);
 
-        // Check if camera initialization was successfull.
+        // Check if camera initialization was successful
         if (tmp != IS_SUCCESS)
           m_task->err("Camera initialization unsuccessful. Error %d", tmp);
 
         // Enables automatic closing of the camera handle after a camera has been removed on-the-fly
         tmp = is_EnableAutoExit(m_cam, IS_ENABLE_AUTO_EXIT);
 
-        // Check if EnableAutoExit was successfull.
+        // Check if EnableAutoExit was successful.
         if (tmp != IS_SUCCESS)
           m_task->err("EnableAutoExit unsuccessful. Error %d", tmp);
 
@@ -284,8 +292,16 @@ namespace Vision
         else
           m_task->err("GetSensorInfo unsuccessful. Error %d", tmp);
 
+        // Set sensor bit depth
+        UINT bitDepth = IS_SENSOR_BIT_DEPTH_12_BIT;
+        tmp = is_DeviceFeature(m_cam, IS_DEVICE_FEATURE_CMD_SET_SENSOR_BIT_DEPTH, (void*)&bitDepth , sizeof(bitDepth));
+        if (tmp != IS_SUCCESS)
+          m_task->err("DeviceFeature setting 12 bit unsuccessful. Error %d", tmp);
+        
         // Set color mode.
-        is_SetColorMode(m_cam, IS_CM_SENSOR_RAW8);
+        tmp = is_SetColorMode(m_cam, IS_CM_SENSOR_RAW12);
+        if (tmp != IS_SUCCESS)
+          m_task->err("SetColorMode unsuccessful. Error %d", tmp);
 
         setAOI(m_aoi);
         setFPS(m_fps);
@@ -351,7 +367,11 @@ namespace Vision
               m_task->spew("Frame: %llu", frame.seqNum);
             }
 
-            int gain = is_SetHardwareGain(m_cam, IS_GET_MASTER_GAIN, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
+            
+            int gain = m_gain;
+            if (m_gain_auto)
+              gain = is_SetHardwareGain(m_cam, IS_GET_MASTER_GAIN, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
+            
             is_GetImageMem(m_cam, (void**)(&m_ppcImgMem));
 
             frame.data = m_imgMems[m_write % c_buf_len];
