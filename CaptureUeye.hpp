@@ -278,7 +278,7 @@ namespace Vision
         // Enables automatic closing of the camera handle after a camera has been removed on-the-fly
         tmp = is_EnableAutoExit(m_cam, IS_ENABLE_AUTO_EXIT);
 
-        // Check if EnableAutoExit was successful.
+        // Check if EnableAutoExit was successful
         if (tmp != IS_SUCCESS)
           m_task->err("EnableAutoExit unsuccessful. Error %d", tmp);
 
@@ -298,11 +298,31 @@ namespace Vision
         if (tmp != IS_SUCCESS)
           m_task->err("DeviceFeature setting 12 bit unsuccessful. Error %d", tmp);
         
-        // Set color mode.
+        // Set color mode
         tmp = is_SetColorMode(m_cam, IS_CM_SENSOR_RAW12);
         if (tmp != IS_SUCCESS)
           m_task->err("SetColorMode unsuccessful. Error %d", tmp);
+        
+        // Enable Flash output for synchronization
+        UINT fMode = IO_FLASH_MODE_FREERUN_HI_ACTIVE;
+        tmp = is_IO(m_cam, IS_IO_CMD_FLASH_SET_MODE, (void*)&fMode, sizeof(fMode));
+        if (tmp != IS_SUCCESS)
+          m_task->err("Enable Flash unsuccessful. Error %d", tmp);
+        
+        fMode = IS_FLASH_AUTO_FREERUN_OFF;
+        tmp = is_IO(m_cam, IS_IO_CMD_FLASH_SET_AUTO_FREERUN, (void*)&fMode, sizeof(fMode));
+        if (tmp != IS_SUCCESS)
+          m_task->err("Disable auto Flash unsuccessful. Error %d", tmp);
 
+        // Set flash duration.
+        IO_FLASH_PARAMS flashParams;
+        flashParams.u32Duration = 10000;
+        flashParams.s32Delay = 100;
+        
+        tmp = is_IO(m_cam, IS_IO_CMD_FLASH_SET_GPIO_PARAMS, (void*)&flashParams, sizeof(flashParams));
+        if (tmp != IS_SUCCESS)
+          m_task->err("Set Flash parameters unsuccessful. Error %d", tmp);
+        
         setAOI(m_aoi);
         setFPS(m_fps);
         is_SetDisplayMode(m_cam, IS_SET_DM_DIB);
