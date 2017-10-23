@@ -66,10 +66,6 @@ namespace Vision
       std::string log_dir;
       //! Area of Interest specification
       AOI aoi;
-      //! Auto Gain
-      bool auto_gain;
-      //! Gain boost
-      bool gain_boost;
       //! Gain
       int gain;
       //! Exposure time
@@ -150,19 +146,10 @@ namespace Vision
                 .minimumValue("0")
                 .description("Height of AOI");
 
-        param("Auto Gain", m_args.auto_gain)
-                .defaultValue("false")
-                .description("Enable Auto Gain");
-
-        param("Gain Boost", m_args.gain_boost)
-                .defaultValue("false")
-                .description("Enable Gain Boost");
-
         param("Gain", m_args.gain)
-                .defaultValue("50")
-                .units(Units::Percentage)
-                .minimumValue("0")
-                .maximumValue("100")
+                .defaultValue("0")
+                .minimumValue("-10")
+                .maximumValue("4")
                 .description("Sensor Gain");
 
         param("Exposure", m_args.exposure)
@@ -190,7 +177,7 @@ namespace Vision
         param("Binning Factor", m_args.binning)
                 .defaultValue("1")
                 .minimumValue("1")
-                .maximumValue("20")
+                .maximumValue("16")
                 .description("Binning factor in the horizontal axis");
 
         bind<IMC::LoggingControl>(this);
@@ -209,7 +196,7 @@ namespace Vision
       onResourceAcquisition(void)
       {
         m_capture = new CaptureUeye(this, m_args.aoi, m_cam, m_args.fps);
-        m_capture->setGain(m_args.auto_gain, m_args.gain_boost, m_args.gain);
+        m_capture->setGain(m_args.gain);
         m_capture->setExposure(m_args.exposure);
       }
 
@@ -274,7 +261,7 @@ namespace Vision
       void
       saveImage(Frame* frame)
       {
-        Path file = m_log_dir / String::str("%07llu_%0.4f_%04d_%d.png", frame->seqNum, frame->timestamp, frame->gainFactor, m_args.gain_boost ? 1 : 0);
+        Path file = m_log_dir / String::str("%07llu_%0.4f_%03d.png", frame->seqNum, frame->timestamp, frame->gainFactor);
 
         m_image_cv = cv::Mat(m_args.aoi.height, m_args.aoi.width, CV_16UC1);
         std::memcpy(m_image_cv.ptr(), frame->data, m_args.aoi.height * m_args.aoi.width * 2);
@@ -287,16 +274,33 @@ namespace Vision
         
         if (m_args.binning > 1)
         {
-          cv::Mat image_cv_bin = cv::Mat(m_args.aoi.height, m_args.aoi.width/m_args.binning, CV_16UC1);
-          m_image_cv *= 2^4;
-          
-          cv::resize(m_image_cv, image_cv_bin, image_cv_bin.size(), 0, 0, cv::INTER_LINEAR);
+          cv::Mat image_cv_bin = binImage(m_image_cv, m_args.binning);
           cv::imwrite(file.c_str(), image_cv_bin, compression_params);
+          
           return;
         }
 
         cv::imwrite(file.c_str(), m_image_cv, compression_params);
       }
+      
+      cv::Mat
+      binImage(cv::Mat input, int binFactor)
+      {
+        cv::Mat output = cv::Mat(input.rows, input.cols/binFactor, CV_16UC1);
+        
+        for(int i = 0; i < output.cols; i++)
+        {
+          int startCol = i * binFactor;
+          cv::Mat tmpCol = cv::Mat(input.rows, 1, CV_64FC1);
+          cv::reduce(input.colRange(startCol,startCol+binFactor-1), tmpCol, 1, CV_REDUCE_SUM, CV_64FC1);
+          
+          tmpCol.convertTo(tmpCol, CV_16UC1);
+          tmpCol.copyTo(output.col(i));
+        }
+        
+        return output;
+      }
+      
       void
       stopCapture(void)
       {
@@ -347,10 +351,10 @@ namespace Vision
             if (m_args.calib_mode && (delta > m_args.calib_delta))
             {
               m_calib_gain++;
-              if (m_calib_gain > 100)
-                m_calib_gain = 0;
+              if (m_calib_gain > 4)
+                m_calib_gain = -10;
 
-              m_capture->setGain(false, false, m_calib_gain);
+              m_capture->setGain(m_calib_gain);
               m_calib_time = now;
             }
           }

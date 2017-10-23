@@ -67,7 +67,7 @@ namespace Vision
       double timestamp;
       //! ID
       unsigned int id;
-      //! Gain in percent of original value
+      //! Gain
       int gainFactor;
     };
 
@@ -85,7 +85,6 @@ namespace Vision
         m_read(0),
         m_write(0),
         m_gain(0),
-        m_gain_auto(false),        
         m_lastTS(0)
       {
         m_imgMems = new char*[c_buf_len];
@@ -178,32 +177,49 @@ namespace Vision
       }
 
       void
-      setGain(bool autogain, bool gainboost, int gain)
+      setGain(int gain)
       {
         m_gain = gain;
-        m_gain_auto = autogain;
-        //Enable or disable auto gain control:
-        double param = autogain ? 1 : 0;
+        
+        //Disable auto gain control:
+        double param = 0;
         int ret = is_SetAutoParameter (m_cam, IS_SET_ENABLE_AUTO_GAIN, &param, 0);
         if (ret == IS_SUCCESS)
-          m_task->debug("%s Auto Gain.", autogain ? "Enabled" : "Disabled");
+          m_task->debug("Disabled Auto Gain.");
         else
-          m_task->err("%s Auto Gain unsuccessful. Error %d", autogain ? "Enable" : "Disable", ret);
+          m_task->err("Disable Auto Gain unsuccessful. Error %d", ret);
         
-        //Enable or disable gain boost:
-        int param_int = gainboost ? IS_SET_GAINBOOST_ON : IS_SET_GAINBOOST_OFF;
-        ret = is_SetGainBoost (m_cam, param_int);
+        //Disable gain boost:
+        ret = is_SetGainBoost (m_cam, IS_SET_GAINBOOST_OFF);
         if (ret == IS_SUCCESS)
-          m_task->debug("%s Gain Boost.", gainboost ? "Enabled" : "Disabled");
+          m_task->debug("Disabled Gain Boost.");
         else
-          m_task->err("%s Gain Boost unsuccessful. Error %d", gainboost ? "Enable" : "Disable", ret);
+          m_task->err("Disable Gain Boost unsuccessful. Error %d", ret);
 
-        //Set gain if not auto:
-        ret = is_SetHardwareGain (m_cam, gain, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
+        //Set HW gain to 0 (=1):
+        ret = is_SetHardwareGain (m_cam, 0, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
         if (ret == IS_SUCCESS)
-          m_task->debug("Set Gain to %d.", gain);
+          m_task->debug("Set HW Gain to %d.", 1);
         else
           m_task->err("SetHardwareGain unsuccessful. Error %d", ret);
+
+        // Get sensor source gain range
+        IS_RANGE_S32 rangeSourceGain;
+        ret = is_DeviceFeature(m_cam, IS_DEVICE_FEATURE_CMD_GET_SENSOR_SOURCE_GAIN_RANGE,
+                                    (void*) &rangeSourceGain, sizeof (rangeSourceGain));
+
+        if (ret == IS_SUCCESS)
+        {
+          m_task->debug("Source Gain range: [%d : %d : %d].",
+                        rangeSourceGain.s32Min, rangeSourceGain.s32Inc, rangeSourceGain.s32Max);
+          
+          ret = is_DeviceFeature(m_cam, IS_DEVICE_FEATURE_CMD_SET_SENSOR_SOURCE_GAIN,
+                                 (void*) &gain, sizeof (gain));
+          if (ret == IS_SUCCESS)
+            m_task->debug("Set Sensor Gain to %d.", gain);
+          else
+            m_task->err("Set Sensor Gain unsuccessful. Error %d", ret);
+        }
       }
 
       Frame*
@@ -252,12 +268,8 @@ namespace Vision
       static const unsigned c_buf_len = 256;
       //! Reader/Writer positions.
       unsigned m_read, m_write;
-      //! Lookup table for gain factors
-      int m_gains[101];
       //! Current gain factor
       int m_gain;
-      //! Current auto gain setting
-      bool m_gain_auto;
       //! Last timestamp
       unsigned long long m_lastTS;
 
@@ -328,11 +340,6 @@ namespace Vision
         is_SetDisplayMode(m_cam, IS_SET_DM_DIB);
         is_SetImageMem(m_cam, m_imgMems[0], m_imgMemIds[0]);
 
-        for (int i = 0; i <= 100; i++)
-        {
-          m_gains[i] = queryGainFactor(i);
-        }
-
         // Enable the FRAME event. Triggers when a frame is ready in memory.
         tmp = is_EnableEvent(m_cam, IS_SET_EVENT_FRAME);
         if (tmp)
@@ -386,18 +393,13 @@ namespace Vision
               frame.seqNum = imageInfo.u64FrameNumber;
               m_task->spew("Frame: %llu", frame.seqNum);
             }
-
-            
-            int gain = m_gain;
-            if (m_gain_auto)
-              gain = is_SetHardwareGain(m_cam, IS_GET_MASTER_GAIN, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
             
             is_GetImageMem(m_cam, (void**)(&m_ppcImgMem));
 
             frame.data = m_imgMems[m_write % c_buf_len];
             frame.id = m_imgMemIds[m_write % c_buf_len];
             frame.timestamp = Clock::getSinceEpoch();
-            frame.gainFactor = m_gains[gain];
+            frame.gainFactor = m_gain;
 
             m_frames[m_write++ % c_buf_len] = frame;
 
