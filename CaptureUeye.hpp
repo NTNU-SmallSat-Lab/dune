@@ -82,34 +82,34 @@ namespace Vision
         m_cam(cam),
         m_aoi(aoi),
         m_fps(fps),
-        m_read(0),
         m_write(0),
         m_gain(0),
         m_lastTS(0)
       {
-        m_imgMems = new char*[c_buf_len];
-        m_imgMemIds = new int[c_buf_len];
-        m_frames = new Frame[c_buf_len];
-
         initializeCam();
       }
 
       //! Destructor.
       ~CaptureUeye(void)
       {
-        for (unsigned i = 0; i < c_buf_len; i++)
-        {
-          int tmp = is_FreeImageMem(m_cam, m_imgMems[i], m_imgMemIds[i]);
 
-          if (tmp)
+        is_ExitImageQueue(m_cam);
+        is_ClearSequence( m_cam );
+
+        // free buffers memory
+        int i;
+        for(i=(c_buf_len-1); i>=0; i--)
+        {
+          // free buffers
+          if(is_FreeImageMem(m_cam, m_vpcSeqImgMem.at(i), m_viSeqMemId.at(i)))
           {
-            m_task->err("Trying to free image buffer %d. Error %d", i, tmp);
-            break;
+            m_task->err("FreeImageMem unsuccessful.");
           }
         }
-        Memory::clear(m_imgMems);
-        Memory::clear(m_imgMemIds);
-        Memory::clear(m_frames);
+
+        // no valid buffers any more
+        m_viSeqMemId.clear();
+        m_vpcSeqImgMem.clear();
 
         is_ExitCamera(m_cam);
       }
@@ -127,26 +127,48 @@ namespace Vision
         int tmp = is_AOI(m_cam, IS_AOI_IMAGE_SET_AOI, (void*)&rectAOI, sizeof(rectAOI));
         if (tmp)
           m_task->err("AOI unsuccessful. Error %d", tmp);
+      }
 
+      void
+      allocateMemory(void)
+      {
+        int tmp;
         // Allocate memory
-
-        // Will hold the picture ID of an image. I think this is an image's
-        // index within a memory area allocated to images
-        int pid;
-
         for (unsigned i = 0; i < c_buf_len; i++)
         {
-          tmp = is_AllocImageMem(m_cam, m_aoi.width, m_aoi.height, 12, &m_ppcImgMem, &pid);
+          INT iImgMemID = 0;
+          char* pcImgMem = 0;
 
-          // Store pointer and picture ID for this memory
-          m_imgMems[i] = m_ppcImgMem;
-          m_imgMemIds[i] = pid;
+          // allocate a single buffer memory
+          tmp = is_AllocImageMem(m_cam, m_aoi.width, m_aoi.height,
+                                 16, &pcImgMem, &iImgMemID);
 
           if (tmp)
           {
             m_task->err("Allocate image buffer %d unsuccessful. Error %d", i, tmp);
             break;
           }
+
+          // put memory into the sequence buffer management
+          tmp = is_AddToSequence(m_cam, pcImgMem, iImgMemID);
+
+          if (tmp)
+          {
+            // free latest buffer
+            is_FreeImageMem(m_cam, pcImgMem, iImgMemID );
+            m_task->err("AddToSequence %d unsuccessful. Error %d", i, tmp);
+            break;
+          }
+
+          m_viSeqMemId.push_back(iImgMemID);
+          m_vpcSeqImgMem.push_back(pcImgMem);
+        }
+
+        // enable the image queue
+        tmp = is_InitImageQueue (m_cam, 0);
+        if (tmp)
+        {
+          m_task->err("InitImageQueue unsuccessful. Error %d", tmp);
         }
       }
 
@@ -154,7 +176,7 @@ namespace Vision
       setFPS(double fps)
       {
         // Set the pixel clock. Higher pixel clock will enable higher FPS.
-        UINT nPixelClockDefault = 100;
+        UINT nPixelClockDefault = 60;
         int tmp = is_PixelClock(m_cam, IS_PIXELCLOCK_CMD_SET,
             (void*)&nPixelClockDefault,
             sizeof(nPixelClockDefault));
@@ -222,23 +244,35 @@ namespace Vision
         }
       }
 
-      Frame*
-      readFrame(void)
+      bool
+      readFrame(Frame &frame_ret)
       {
-        if ((m_read % c_buf_len) == (m_write % c_buf_len))
-          return NULL;
-
-        return &m_frames[m_read++ % c_buf_len];
+        if(m_frame_buffer.empty())
+          return false;
+        else
+        {
+          frame_ret = m_frame_buffer.front();
+          m_frame_buffer.pop();
+          return true;
+        }
       }
 
       void
       stopCapture(void)
       {
         int ret = is_StopLiveVideo(m_cam, IS_FORCE_VIDEO_STOP);
+
         if (ret == IS_SUCCESS)
           m_task->inf("Image capture stopped");
         else
           m_task->err("StopLiveVideo unsuccessful. Error %d", ret);
+
+        UINT fMode = IO_FLASH_MODE_OFF;
+        ret = is_IO(m_cam, IS_IO_CMD_FLASH_SET_MODE, (void*)&fMode, sizeof(fMode));
+        if (ret == IS_SUCCESS)
+          m_task->inf("Disabled Flash");
+        else
+          m_task->err("Disable Flash unsuccessful. Error %d", ret);
       }
 
       int
@@ -250,8 +284,8 @@ namespace Vision
     private:
       //! Parent task.
       DUNE::Tasks::Task* m_task;
-      //! Array of captured frames.
-      Frame* m_frames;
+      //! Queue of captured frames.
+      std::queue<Frame> m_frame_buffer;
       //! Camera handle.
       HIDS m_cam;
       //! Will contain the address of memory allocated for images.
@@ -260,14 +294,14 @@ namespace Vision
       AOI m_aoi;
       //! Frames per Second.
       double m_fps;
-      //! Will contain pointers to all image allocated memory areas
-      char **m_imgMems;
       //! Will contain picture IDs for the above array
-      int *m_imgMemIds;
+      std::vector<INT> m_viSeqMemId;
+      //! Will contain pointers to all image allocated memory areas
+      std::vector<char*> m_vpcSeqImgMem;
       //! Buffer Size
-      static const unsigned c_buf_len = 256;
-      //! Reader/Writer positions.
-      unsigned m_read, m_write;
+      static const unsigned c_buf_len = 32;
+      //! Writer positions.
+      unsigned m_write;
       //! Current gain factor
       int m_gain;
       //! Last timestamp
@@ -338,7 +372,8 @@ namespace Vision
         setAOI(m_aoi);
         setFPS(m_fps);
         is_SetDisplayMode(m_cam, IS_SET_DM_DIB);
-        is_SetImageMem(m_cam, m_imgMems[0], m_imgMemIds[0]);
+//        is_SetImageMem(m_cam, m_imgMems[0], m_imgMemIds[0]);
+        allocateMemory();
 
         // Enable the FRAME event. Triggers when a frame is ready in memory.
         tmp = is_EnableEvent(m_cam, IS_SET_EVENT_FRAME);
@@ -356,20 +391,15 @@ namespace Vision
           m_task->inf("Image capture started");
 
         // Small delay to let camera start
-        Time::Delay::wait(1.0);
+        Time::Delay::wait(0.01);
+
+        INT nMemID = 0;
+        char* pBuffer = NULL;
 
         while (!isStopping() && !stat)
         {
-          stat = is_SetImageMem(m_cam, m_imgMems[m_write % c_buf_len], m_imgMemIds[m_write % c_buf_len]);
-          if (stat)
-          {
-            m_task->err("SetImageMem Error: %d", stat);
-
-            Time::Delay::wait(0.1);
-            continue;
-          }
-
-          stat = is_WaitEvent(m_cam, IS_SET_EVENT_FRAME, 1000);
+          // run the the image queue acquisition
+          stat = is_WaitForNextImage(m_cam, 1000, &pBuffer, &nMemID);
           if (stat)
           {
             if (stat != IS_TIMED_OUT)
@@ -377,12 +407,12 @@ namespace Vision
           }
           else
           {
-            m_task->spew("Captured! %d", m_write);
+            m_task->spew("Captured frame!");
 
             Frame frame;
 
             UEYEIMAGEINFO imageInfo;
-            int nRet = is_GetImageInfo(m_cam, m_imgMemIds[m_write % c_buf_len], &imageInfo, sizeof(imageInfo));
+            int nRet = is_GetImageInfo(m_cam, nMemID, &imageInfo, sizeof(imageInfo));
             if (nRet == IS_SUCCESS)
             {
               // Get internal timestamp of image capture (tick count of the camera in 0.1 μs steps)
@@ -394,20 +424,20 @@ namespace Vision
               m_task->spew("Frame: %llu", frame.seqNum);
             }
             
-            is_GetImageMem(m_cam, (void**)(&m_ppcImgMem));
 
-            frame.data = m_imgMems[m_write % c_buf_len];
-            frame.id = m_imgMemIds[m_write % c_buf_len];
+            std::memcpy(frame.data, pBuffer, m_aoi.height * m_aoi.width * 2);
+            frame.id = nMemID;
             frame.timestamp = Clock::getSinceEpoch();
             frame.gainFactor = m_gain;
 
-            m_frames[m_write++ % c_buf_len] = frame;
-
-            if (m_write == m_read)
+            m_frame_buffer.push(frame);
+            if (m_frame_buffer.size() > c_buf_len)
             {
               m_task->err("Buffer overrun!");
-              Time::Delay::wait(0.1);
             }
+
+            // do not forget to unlock the buffer, when all buffers are locked we cannot receive images any more
+            is_UnlockSeqBuf (m_cam, nMemID, pBuffer);
           }
         }
       }

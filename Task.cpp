@@ -82,10 +82,6 @@ namespace Vision
 
     struct Task:public DUNE::Tasks::Task
     {
-      //! %Frame width. Unclear if 640 or 960
-      static const unsigned c_width = 640;
-      //! %Frame height. 480 is total, 250 is usable.
-      static const unsigned c_height = 250;
       //! Configuration parameters.
       Arguments m_args;
       //! %Destination log folder.
@@ -95,19 +91,19 @@ namespace Vision
       //! Thread for image capture.
       CaptureUeye* m_capture;
       //! Frame
-      Frame* m_frame;
+      Frame m_frame;
       //! Current calibration gain
       int m_calib_gain;
       //! Time of last calibration gain change
       double m_calib_time;
       //! OpenCV frame.
       cv::Mat m_image_cv;
+
       Task(const std::string& name, Tasks::Context& ctx):
       Tasks::Task(name, ctx),
       m_log_dir(ctx.dir_log),
       m_cam(1),
       m_capture(NULL),
-      m_frame(NULL),
       m_calib_gain(0),
       m_calib_time(0.0)
       {
@@ -209,12 +205,6 @@ namespace Vision
           delete m_capture;
           m_capture = NULL;
         }
-
-        if (m_frame != NULL)
-        {
-          delete m_frame;
-          m_frame = NULL;
-        }
       }
 
       //! Initialize resources and start capturing frames.
@@ -223,6 +213,7 @@ namespace Vision
       {
         setEntityState(IMC::EntityState::ESTA_NORMAL, Status::CODE_IDLE);
       }
+
       void
       consume(const IMC::LoggingControl* msg)
       {
@@ -235,6 +226,7 @@ namespace Vision
           m_log_dir.create();
         }
       }
+
       void
       onRequestActivation(void)
       {
@@ -243,6 +235,7 @@ namespace Vision
         dispatch(log_ctl);
         activate();
       }
+
       void
       onActivation(void)
       {
@@ -250,6 +243,7 @@ namespace Vision
         setEntityState(IMC::EntityState::ESTA_NORMAL, Status::CODE_ACTIVE);
         m_capture->start();
       }
+
       void
       onDeactivation(void)
       {
@@ -264,14 +258,13 @@ namespace Vision
         Path file = m_log_dir / String::str("%07llu_%0.4f_%03d.png", frame->seqNum, frame->timestamp, frame->gainFactor);
 
         m_image_cv = cv::Mat(m_args.aoi.height, m_args.aoi.width, CV_16UC1);
-        std::memcpy(m_image_cv.ptr(), frame->data, m_args.aoi.height * m_args.aoi.width * 2);
-
-        cv::flip(m_image_cv, m_image_cv, 0);
+//        std::memcpy(m_image_cv.ptr(), frame->data, m_args.aoi.height * m_args.aoi.width * 2);
+        m_image_cv.data = (uchar*) frame->data;
 
         std::vector<int> compression_params;
         compression_params.push_back(cv::IMWRITE_PNG_COMPRESSION);
         compression_params.push_back(0);
-        
+
         if (m_args.binning > 1)
         {
           cv::Mat image_cv_bin = binImage(m_image_cv, m_args.binning);
@@ -292,7 +285,7 @@ namespace Vision
         {
           int startCol = i * binFactor;
           cv::Mat tmpCol = cv::Mat(input.rows, 1, CV_64FC1);
-          cv::reduce(input.colRange(startCol,startCol+binFactor-1), tmpCol, 1, CV_REDUCE_SUM, CV_64FC1);
+          cv::reduce(input.colRange(startCol, startCol + binFactor-1), tmpCol, 1, CV_REDUCE_SUM, CV_64FC1);
           
           tmpCol.convertTo(tmpCol, CV_16UC1);
           tmpCol.copyTo(output.col(i));
@@ -306,17 +299,12 @@ namespace Vision
       {
         m_capture->stopCapture();
 
-        bool qhasdata = true;
-        int i = -1;
+        int i = 0;
 
         debug("Emptying buffer.");
-        while (qhasdata)
+        while (m_capture->readFrame(m_frame))
         {
-          m_frame = m_capture->readFrame();
-          if (m_frame == NULL)
-            qhasdata = false;
-          else
-            saveImage(m_frame);
+          saveImage(&m_frame);
           i++;
         }
 
@@ -338,12 +326,11 @@ namespace Vision
             continue;
           }
 
-          m_frame = m_capture->readFrame();
-          if (m_frame == NULL)
+          if (!m_capture->readFrame(m_frame))
             Time::Delay::wait(0.5);
           else
           {
-            saveImage(m_frame);
+            saveImage(&m_frame);
 
             double now = Time::Clock::get();
             double delta = now - m_calib_time;
