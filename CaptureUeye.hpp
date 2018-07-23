@@ -424,7 +424,7 @@ namespace Vision
               m_task->spew("Frame: %llu", frame.seqNum);
             }
             
-
+            frame.data = (char*)std::malloc(m_aoi.height * m_aoi.width * 2);
             std::memcpy(frame.data, pBuffer, m_aoi.height * m_aoi.width * 2);
             frame.id = nMemID;
             frame.timestamp = Clock::getSinceEpoch();
