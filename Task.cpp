@@ -285,7 +285,7 @@ namespace Vision
         {
           int startCol = i * binFactor;
           cv::Mat tmpCol = cv::Mat(input.rows, 1, CV_64FC1);
-          cv::reduce(input.colRange(startCol, startCol + binFactor-1), tmpCol, 1, CV_REDUCE_SUM, CV_64FC1);
+          cv::reduce(input.colRange(startCol, startCol + binFactor), tmpCol, 1, CV_REDUCE_SUM, CV_64FC1);
           
           tmpCol.convertTo(tmpCol, CV_16UC1);
           tmpCol.copyTo(output.col(i));
