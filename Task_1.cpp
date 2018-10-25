@@ -70,10 +70,16 @@ namespace Vision
       int gain;
       //! Exposure time
       float exposure;
+      //! Calibration mode
+      bool calib_mode;
+      //! Calibration delta
+      float calib_delta;
       //! Binning factor
       int binning;
-      //! Pixel Clock index
-      unsigned pixel_clock;
+      //! Enable streaming
+      bool stream;
+      //! Binning factor for streaming
+      int stream_binning;
     };
 
     //! Device driver task.
@@ -90,14 +96,23 @@ namespace Vision
       CaptureUeye* m_capture;
       //! Frame
       Frame m_frame;
+      //! Current calibration gain
+      int m_calib_gain;
+      //! Time of last calibration gain change
+      double m_calib_time;
       //! OpenCV frame.
       cv::Mat m_image_cv;
+      //! TCP socket.
+      Network::TCPSocket* m_tcp;
 
       Task(const std::string& name, Tasks::Context& ctx):
       Tasks::Task(name, ctx),
       m_log_dir(ctx.dir_log),
       m_cam(1),
-      m_capture(NULL)
+      m_capture(NULL),
+      m_calib_gain(0),
+      m_calib_time(0.0),
+      m_tcp(NULL)
       {
         // Retrieve configuration values.
         paramActive(Tasks::Parameter::SCOPE_GLOBAL,
@@ -125,24 +140,42 @@ namespace Vision
                 .description("Y coordinate of upper left corner of AOI");
 
         param("AOI - Width", m_args.aoi.width)
+                .defaultValue("640")
                 .minimumValue("0")
                 .description("Width of AOI");
 
         param("AOI - Height", m_args.aoi.height)
+                .defaultValue("480")
                 .minimumValue("0")
                 .description("Height of AOI");
 
         param("Gain", m_args.gain)
                 .defaultValue("0")
+                .minimumValue("-10")
+                .maximumValue("4")
                 .description("Sensor Gain");
 
         param("Exposure", m_args.exposure)
+                .defaultValue("4")
                 .units(Units::Millisecond)
+                .minimumValue("1")
+                .maximumValue("20")
                 .description("Exposure Time");
 
         param("Log Dir", m_args.log_dir)
                 .defaultValue("")
                 .description("Path to Log Directory");
+
+        param("Calibration Mode", m_args.calib_mode)
+                .defaultValue("false")
+                .description("Enable calibration mode");
+
+        param("Calibration Delta", m_args.calib_delta)
+                .defaultValue("1.0")
+                .units(Units::Second)
+                .minimumValue("0.1")
+                .maximumValue("10.0")
+                .description("Time interval for each gain in calibration mode");
 
         param("Binning Factor", m_args.binning)
                 .defaultValue("1")
@@ -150,9 +183,15 @@ namespace Vision
                 .maximumValue("16")
                 .description("Binning factor in the horizontal axis");
 
-        param("Pixel Clock", m_args.pixel_clock)
-                .minimumValue("0")
-                .description("Pixel Clock value in step number");
+        param("Streamming", m_args.stream)
+                .defaultValue("false")
+                .description("Enable streamming mode");
+
+        param("Binning Factor - Stream", m_args.stream_binning)
+                .defaultValue("16")
+                .minimumValue("1")
+                .maximumValue("16")
+                .description("Binning factor in the horizontal axis");
 
         bind<IMC::LoggingControl>(this);
       }
@@ -169,9 +208,20 @@ namespace Vision
       void
       onResourceAcquisition(void)
       {
-        m_capture = new CaptureUeye(this, m_args.aoi, m_cam, m_args.fps, m_args.pixel_clock);
+        m_capture = new CaptureUeye(this, m_args.aoi, m_cam, m_args.fps);
         m_capture->setGain(m_args.gain);
         m_capture->setExposure(m_args.exposure);
+
+        try
+        {
+          m_tcp = new TCPSocket;
+          m_tcp->bind(1337);
+          m_tcp->setNoDelay(true);
+        }
+        catch (...)
+        {
+          Memory::clear(m_tcp);
+        }
       }
 
       //! Release allocated resources.
@@ -183,6 +233,8 @@ namespace Vision
           delete m_capture;
           m_capture = NULL;
         }
+
+        Memory::clear(m_tcp);
       }
 
       //! Initialize resources and start capturing frames.
@@ -237,7 +289,28 @@ namespace Vision
 
         m_image_cv = cv::Mat(m_args.aoi.height, m_args.aoi.width, CV_16UC1);
 //        std::memcpy(m_image_cv.ptr(), frame->data, m_args.aoi.height * m_args.aoi.width * 2);
-        m_image_cv.data = (uchar*) frame->data; //TODO: look into cv::imdecode
+
+        m_image_cv.data = (uchar*) frame->data;
+
+        if (m_args.stream)
+        {
+          cv::Mat image_stream = m_image_cv.clone();
+
+          std::vector<int> compression_params;
+          compression_params.push_back(cv::IMWRITE_JPEG_QUALITY);
+          compression_params.push_back(80);
+
+          std::vector<uint8_t> buf;
+
+          if (m_args.stream_binning)
+          {
+            image_stream = binImage(image_stream, m_args.stream_binning);
+          }
+
+          cv::imencode("png", image_stream, buf, compression_params);
+
+          m_tcp->write(buf.data(), buf.size());
+        }
 
         std::vector<int> compression_params;
         compression_params.push_back(cv::IMWRITE_PNG_COMPRESSION);
@@ -246,7 +319,7 @@ namespace Vision
         if (m_args.binning > 1)
         {
           cv::Mat image_cv_bin = binImage(m_image_cv, m_args.binning);
-          cv::imwrite(file.c_str(), image_cv_bin, compression_params); //TODO: write RAW data instead?
+          cv::imwrite(file.c_str(), image_cv_bin, compression_params);
           
           return;
         }
@@ -262,8 +335,8 @@ namespace Vision
         for(int i = 0; i < output.cols; i++)
         {
           int startCol = i * binFactor;
-          cv::Mat tmpCol = cv::Mat(input.rows, 1, CV_64FC1); //TODO: why 64F?
-          cv::reduce(input.colRange(startCol, startCol + binFactor), tmpCol, 1, CV_REDUCE_SUM, CV_64FC1); //TODO: why 64F?
+          cv::Mat tmpCol = cv::Mat(input.rows, 1, CV_64FC1);
+          cv::reduce(input.colRange(startCol, startCol + binFactor-1), tmpCol, 1, CV_REDUCE_SUM, CV_64FC1);
           
           tmpCol.convertTo(tmpCol, CV_16UC1);
           tmpCol.copyTo(output.col(i));
@@ -307,7 +380,22 @@ namespace Vision
           if (!m_capture->readFrame(m_frame))
             Time::Delay::wait(0.5);
           else
+          {
             saveImage(&m_frame);
+
+            double now = Time::Clock::get();
+            double delta = now - m_calib_time;
+
+            if (m_args.calib_mode && (delta > m_args.calib_delta))
+            {
+              m_calib_gain++;
+              if (m_calib_gain > 4)
+                m_calib_gain = -10;
+
+              m_capture->setGain(m_calib_gain);
+              m_calib_time = now;
+            }
+          }
         }
 
         stopCapture();

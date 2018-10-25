@@ -77,11 +77,12 @@ namespace Vision
       //! Constructor.
       //! @param[in] task parent task.
       //! @param[in] buffer_capacity packet buffer capacity.
-      CaptureUeye(DUNE::Tasks::Task* task, AOI aoi, HIDS cam = 1, double fps = 30.0):
+      CaptureUeye(DUNE::Tasks::Task* task, AOI aoi, HIDS cam = 1, double fps = 30.0, unsigned pixel_clock = 1):
         m_task(task),
         m_cam(cam),
         m_aoi(aoi),
         m_fps(fps),
+        m_pixel_clock(pixel_clock),
         m_write(0),
         m_gain(0),
         m_lastTS(0)
@@ -92,16 +93,15 @@ namespace Vision
       //! Destructor.
       ~CaptureUeye(void)
       {
-
         is_ExitImageQueue(m_cam);
-        is_ClearSequence( m_cam );
+        is_ClearSequence(m_cam);
 
         // free buffers memory
         int i;
-        for(i=(c_buf_len-1); i>=0; i--)
+        for (i = (c_buf_len - 1); i >= 0; i--)
         {
           // free buffers
-          if(is_FreeImageMem(m_cam, m_vpcSeqImgMem.at(i), m_viSeqMemId.at(i)))
+          if (is_FreeImageMem(m_cam, m_vpcSeqImgMem.at(i), m_viSeqMemId.at(i)))
           {
             m_task->err("FreeImageMem unsuccessful.");
           }
@@ -124,7 +124,7 @@ namespace Vision
         rectAOI.s32Width  = aoi.width;
         rectAOI.s32Height = aoi.height;
 
-        int tmp = is_AOI(m_cam, IS_AOI_IMAGE_SET_AOI, (void*)&rectAOI, sizeof(rectAOI));
+        int tmp = is_AOI(m_cam, IS_AOI_IMAGE_SET_AOI, (void*) &rectAOI, sizeof (rectAOI));
         if (tmp)
           m_task->err("AOI unsuccessful. Error %d", tmp);
       }
@@ -155,7 +155,7 @@ namespace Vision
           if (tmp)
           {
             // free latest buffer
-            is_FreeImageMem(m_cam, pcImgMem, iImgMemID );
+            is_FreeImageMem(m_cam, pcImgMem, iImgMemID);
             m_task->err("AddToSequence %d unsuccessful. Error %d", i, tmp);
             break;
           }
@@ -165,7 +165,7 @@ namespace Vision
         }
 
         // enable the image queue
-        tmp = is_InitImageQueue (m_cam, 0);
+        tmp = is_InitImageQueue(m_cam, 0);
         if (tmp)
         {
           m_task->err("InitImageQueue unsuccessful. Error %d", tmp);
@@ -173,16 +173,49 @@ namespace Vision
       }
 
       void
-      setFPS(double fps)
+      setPixelClock(unsigned pixel_clock)
       {
+        UINT nNumberOfSupportedPixelClocks = 0;
+        UINT nPixelClockList[150];
+
+        INT nRet = is_PixelClock(m_cam, IS_PIXELCLOCK_CMD_GET_NUMBER,
+                                 (void*) &nNumberOfSupportedPixelClocks,
+                                 sizeof (nNumberOfSupportedPixelClocks));
+
+        if ((nRet == IS_SUCCESS) && (nNumberOfSupportedPixelClocks > 0))
+        {
+          m_task->debug("Pixel Clock Number of values: %d.", nNumberOfSupportedPixelClocks);
+
+          // No camera has more than 150 different pixel clocks.
+          // Of course, the list can be allocated dynamically
+          ZeroMemory(&nPixelClockList, sizeof (nPixelClockList));
+          nRet = is_PixelClock(m_cam, IS_PIXELCLOCK_CMD_GET_LIST,
+                               (void*) nPixelClockList,
+                               nNumberOfSupportedPixelClocks * sizeof (UINT));
+
+        }
+
+        UINT nRange[3];
+        ZeroMemory(nRange, sizeof (nRange));
+
+        // Get pixel clock range
+        nRet = is_PixelClock(m_cam, IS_PIXELCLOCK_CMD_GET_RANGE, (void*) nRange, sizeof (nRange));
+        if (nRet == IS_SUCCESS)
+        {
+          m_task->debug("Pixel Clock range: [%d : %d : %d].", nRange[0], nRange[2], nRange[1]);
+        }
+
         // Set the pixel clock. Higher pixel clock will enable higher FPS.
-        UINT nPixelClockDefault = 60;
         int tmp = is_PixelClock(m_cam, IS_PIXELCLOCK_CMD_SET,
-            (void*)&nPixelClockDefault,
-            sizeof(nPixelClockDefault));
+                                (void*) &nPixelClockList[pixel_clock],
+                                sizeof (nPixelClockList[pixel_clock]));
         if (tmp != IS_SUCCESS)
           m_task->err("PixelClock unsuccessful. Error %d", tmp);
-        
+      }
+
+      void
+      setFPS(double fps)
+      {
         // Set target FPS
         double newFPS, fpsWish = fps;
         is_SetFrameRate(m_cam, fpsWish, &newFPS);
@@ -194,7 +227,7 @@ namespace Vision
       {
         // Set target Exposure time
         double newExp = exp;
-        is_Exposure (m_cam, IS_EXPOSURE_CMD_SET_EXPOSURE, (void*) &newExp, 8);
+        is_Exposure(m_cam, IS_EXPOSURE_CMD_SET_EXPOSURE, (void*) &newExp, 8);
         m_task->debug("Requested Exposure time %.2fms, actual is now %.2fms", exp, newExp);
       }
 
@@ -202,39 +235,39 @@ namespace Vision
       setGain(int gain)
       {
         m_gain = gain;
-        
+
         //Disable auto gain control:
         double param = 0;
-        int ret = is_SetAutoParameter (m_cam, IS_SET_ENABLE_AUTO_GAIN, &param, 0);
+        int ret = is_SetAutoParameter(m_cam, IS_SET_ENABLE_AUTO_GAIN, &param, 0);
         if (ret == IS_SUCCESS)
           m_task->debug("Disabled Auto Gain.");
         else
           m_task->err("Disable Auto Gain unsuccessful. Error %d", ret);
-        
+
         //Disable gain boost:
-        ret = is_SetGainBoost (m_cam, IS_SET_GAINBOOST_OFF);
+        ret = is_SetGainBoost(m_cam, IS_SET_GAINBOOST_OFF);
         if (ret == IS_SUCCESS)
           m_task->debug("Disabled Gain Boost.");
         else
           m_task->err("Disable Gain Boost unsuccessful. Error %d", ret);
 
         //Set HW gain to 0 (=1):
-        ret = is_SetHardwareGain (m_cam, 0, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
+        ret = is_SetHardwareGain(m_cam, 0, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
         if (ret == IS_SUCCESS)
-          m_task->debug("Set HW Gain to %d.", 1);
+          m_task->debug("Disabled Digital Gain.");
         else
           m_task->err("SetHardwareGain unsuccessful. Error %d", ret);
 
         // Get sensor source gain range
         IS_RANGE_S32 rangeSourceGain;
         ret = is_DeviceFeature(m_cam, IS_DEVICE_FEATURE_CMD_GET_SENSOR_SOURCE_GAIN_RANGE,
-                                    (void*) &rangeSourceGain, sizeof (rangeSourceGain));
+                               (void*) &rangeSourceGain, sizeof (rangeSourceGain));
 
         if (ret == IS_SUCCESS)
         {
           m_task->debug("Source Gain range: [%d : %d : %d].",
                         rangeSourceGain.s32Min, rangeSourceGain.s32Inc, rangeSourceGain.s32Max);
-          
+
           ret = is_DeviceFeature(m_cam, IS_DEVICE_FEATURE_CMD_SET_SENSOR_SOURCE_GAIN,
                                  (void*) &gain, sizeof (gain));
           if (ret == IS_SUCCESS)
@@ -247,7 +280,7 @@ namespace Vision
       bool
       readFrame(Frame &frame_ret)
       {
-        if(m_frame_buffer.empty())
+        if (m_frame_buffer.empty())
           return false;
         else
         {
@@ -268,7 +301,7 @@ namespace Vision
           m_task->err("StopLiveVideo unsuccessful. Error %d", ret);
 
         UINT fMode = IO_FLASH_MODE_OFF;
-        ret = is_IO(m_cam, IS_IO_CMD_FLASH_SET_MODE, (void*)&fMode, sizeof(fMode));
+        ret = is_IO(m_cam, IS_IO_CMD_FLASH_SET_MODE, (void*) &fMode, sizeof (fMode));
         if (ret == IS_SUCCESS)
           m_task->inf("Disabled Flash");
         else
@@ -278,7 +311,7 @@ namespace Vision
       int
       queryGainFactor(int gain)
       {
-          return is_SetHWGainFactor(m_cam, IS_INQUIRE_MASTER_GAIN_FACTOR, gain);
+        return is_SetHWGainFactor(m_cam, IS_INQUIRE_MASTER_GAIN_FACTOR, gain);
       }
 
     private:
@@ -294,17 +327,19 @@ namespace Vision
       AOI m_aoi;
       //! Frames per Second.
       double m_fps;
-      //! Will contain picture IDs for the above array
+      //! Pixel Clock.
+      unsigned m_pixel_clock;
+      //! Will contain picture IDs for the above array.
       std::vector<INT> m_viSeqMemId;
-      //! Will contain pointers to all image allocated memory areas
+      //! Will contain pointers to all image allocated memory areas.
       std::vector<char*> m_vpcSeqImgMem;
       //! Buffer Size
       static const unsigned c_buf_len = 32;
       //! Writer positions.
       unsigned m_write;
-      //! Current gain factor
+      //! Current gain factor.
       int m_gain;
-      //! Last timestamp
+      //! Last timestamp.
       unsigned long long m_lastTS;
 
       void
@@ -340,23 +375,33 @@ namespace Vision
 
         // Set sensor bit depth
         UINT bitDepth = IS_SENSOR_BIT_DEPTH_12_BIT;
-        tmp = is_DeviceFeature(m_cam, IS_DEVICE_FEATURE_CMD_SET_SENSOR_BIT_DEPTH, (void*)&bitDepth , sizeof(bitDepth));
+        tmp = is_DeviceFeature(m_cam, IS_DEVICE_FEATURE_CMD_SET_SENSOR_BIT_DEPTH, (void*) &bitDepth, sizeof (bitDepth));
         if (tmp != IS_SUCCESS)
-          m_task->err("DeviceFeature setting 12 bit unsuccessful. Error %d", tmp);
-        
+        {
+          m_task->war("DeviceFeature setting 12 bit unsuccessful. Error %d", tmp);
+        }
+
         // Set color mode
         tmp = is_SetColorMode(m_cam, IS_CM_SENSOR_RAW12);
         if (tmp != IS_SUCCESS)
-          m_task->err("SetColorMode unsuccessful. Error %d", tmp);
-        
+        {
+          m_task->war("SetColorMode RAW12 unsuccessful. Error %d", tmp);
+          
+          tmp = is_SetColorMode(m_cam, IS_CM_SENSOR_RAW8);
+          if (tmp != IS_SUCCESS)
+            m_task->err("SetColorMode RAW8 unsuccessful. Error %d", tmp);
+          else
+            m_task->debug("SetColorMode RAW8 successful.");
+        }
+
         // Enable Flash output for synchronization
         UINT fMode = IO_FLASH_MODE_FREERUN_HI_ACTIVE;
-        tmp = is_IO(m_cam, IS_IO_CMD_FLASH_SET_MODE, (void*)&fMode, sizeof(fMode));
+        tmp = is_IO(m_cam, IS_IO_CMD_FLASH_SET_MODE, (void*) &fMode, sizeof (fMode));
         if (tmp != IS_SUCCESS)
           m_task->err("Enable Flash unsuccessful. Error %d", tmp);
-        
+
         fMode = IS_FLASH_AUTO_FREERUN_OFF;
-        tmp = is_IO(m_cam, IS_IO_CMD_FLASH_SET_AUTO_FREERUN, (void*)&fMode, sizeof(fMode));
+        tmp = is_IO(m_cam, IS_IO_CMD_FLASH_SET_AUTO_FREERUN, (void*) &fMode, sizeof (fMode));
         if (tmp != IS_SUCCESS)
           m_task->err("Disable auto Flash unsuccessful. Error %d", tmp);
 
@@ -364,15 +409,16 @@ namespace Vision
         IO_FLASH_PARAMS flashParams;
         flashParams.u32Duration = 10000;
         flashParams.s32Delay = 100;
-        
-        tmp = is_IO(m_cam, IS_IO_CMD_FLASH_SET_GPIO_PARAMS, (void*)&flashParams, sizeof(flashParams));
+
+        tmp = is_IO(m_cam, IS_IO_CMD_FLASH_SET_GPIO_PARAMS, (void*) &flashParams, sizeof (flashParams));
         if (tmp != IS_SUCCESS)
           m_task->err("Set Flash parameters unsuccessful. Error %d", tmp);
-        
+
         setAOI(m_aoi);
+        setPixelClock(m_pixel_clock);
         setFPS(m_fps);
         is_SetDisplayMode(m_cam, IS_SET_DM_DIB);
-//        is_SetImageMem(m_cam, m_imgMems[0], m_imgMemIds[0]);
+        //        is_SetImageMem(m_cam, m_imgMems[0], m_imgMemIds[0]);
         allocateMemory();
 
         // Enable the FRAME event. Triggers when a frame is ready in memory.
@@ -412,7 +458,7 @@ namespace Vision
             Frame frame;
 
             UEYEIMAGEINFO imageInfo;
-            int nRet = is_GetImageInfo(m_cam, nMemID, &imageInfo, sizeof(imageInfo));
+            int nRet = is_GetImageInfo(m_cam, nMemID, &imageInfo, sizeof (imageInfo));
             if (nRet == IS_SUCCESS)
             {
               // Get internal timestamp of image capture (tick count of the camera in 0.1 μs steps)
@@ -423,8 +469,8 @@ namespace Vision
               frame.seqNum = imageInfo.u64FrameNumber;
               m_task->spew("Frame: %llu", frame.seqNum);
             }
-            
-            frame.data = (char*)std::malloc(m_aoi.height * m_aoi.width * 2);
+
+            frame.data = (char*) std::malloc(m_aoi.height * m_aoi.width * 2);
             std::memcpy(frame.data, pBuffer, m_aoi.height * m_aoi.width * 2);
             frame.id = nMemID;
             frame.timestamp = Clock::getSinceEpoch();
@@ -437,7 +483,7 @@ namespace Vision
             }
 
             // do not forget to unlock the buffer, when all buffers are locked we cannot receive images any more
-            is_UnlockSeqBuf (m_cam, nMemID, pBuffer);
+            is_UnlockSeqBuf(m_cam, nMemID, pBuffer);
           }
         }
       }
