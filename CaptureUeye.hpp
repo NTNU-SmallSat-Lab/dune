@@ -77,16 +77,29 @@ namespace Vision
       //! Constructor.
       //! @param[in] task parent task.
       //! @param[in] buffer_capacity packet buffer capacity.
-      CaptureUeye(DUNE::Tasks::Task* task, AOI aoi, HIDS cam = 1, double fps = 30.0, unsigned pixel_clock = 1):
+      CaptureUeye(DUNE::Tasks::Task* task, AOI aoi, HIDS cam = 1,
+                  double fps = 30.0, unsigned pixel_clock = 1,
+                  bool bin_v = false, bool bin_h = false):
         m_task(task),
         m_cam(cam),
         m_aoi(aoi),
         m_fps(fps),
         m_pixel_clock(pixel_clock),
+        m_bin_v(bin_v),
+        m_bin_h(bin_h),
         m_write(0),
         m_gain(0),
         m_lastTS(0)
       {
+          
+        m_height = aoi.height;
+        m_width  = aoi.width;
+        
+        if (bin_v)
+          m_height /= 2;
+        if (bin_h)
+          m_width /= 2;
+        
         initializeCam();
       }
 
@@ -140,7 +153,7 @@ namespace Vision
           char* pcImgMem = 0;
 
           // allocate a single buffer memory
-          tmp = is_AllocImageMem(m_cam, m_aoi.width, m_aoi.height,
+          tmp = is_AllocImageMem(m_cam, m_width, m_height,
                                  16, &pcImgMem, &iImgMemID);
 
           if (tmp)
@@ -276,6 +289,63 @@ namespace Vision
             m_task->err("Set Sensor Gain unsuccessful. Error %d", ret);
         }
       }
+      
+      void
+      setBinning(bool bin_v, bool bin_h)
+      {
+        int ret = is_SetBinning(m_cam, IS_GET_SUPPORTED_BINNING);
+        if (ret)
+        {
+          m_task->debug("On-sensor binning supported modes:");
+          if (ret & IS_BINNING_2X_VERTICAL)
+            m_task->debug("2X Vertical");
+          if (ret & IS_BINNING_2X_HORIZONTAL)
+            m_task->debug("2X Horizontal");
+          if (ret & IS_BINNING_3X_VERTICAL)
+            m_task->debug("3X Vertical");
+          if (ret & IS_BINNING_3X_HORIZONTAL)
+            m_task->debug("3X Horizontal");
+          if (ret & IS_BINNING_4X_VERTICAL)
+            m_task->debug("4X Vertical");
+          if (ret & IS_BINNING_4X_HORIZONTAL)
+            m_task->debug("4X Horizontal");
+          if (ret & IS_BINNING_5X_VERTICAL)
+            m_task->debug("5X Vertical");
+          if (ret & IS_BINNING_5X_HORIZONTAL)
+            m_task->debug("5X Horizontal");
+          if (ret & IS_BINNING_6X_VERTICAL)
+            m_task->debug("6X Vertical");
+          if (ret & IS_BINNING_6X_HORIZONTAL)
+            m_task->debug("6X Horizontal");
+          if (ret & IS_BINNING_8X_VERTICAL)
+            m_task->debug("8X Vertical");
+          if (ret & IS_BINNING_8X_HORIZONTAL)
+            m_task->debug("8X Horizontal");
+          if (ret & IS_BINNING_16X_VERTICAL)
+            m_task->debug("16X Vertical");
+          if (ret & IS_BINNING_16X_HORIZONTAL)
+            m_task->debug("16X Horizontal");
+          
+          int bin_factor_request = 0;
+          
+          if (bin_v)
+            bin_factor_request |= IS_BINNING_2X_VERTICAL;
+          if (bin_h)
+            bin_factor_request |= IS_BINNING_2X_HORIZONTAL;
+          
+          if (bin_factor_request)
+          {
+            ret = is_SetBinning(m_cam, bin_factor_request);
+            if (ret == IS_SUCCESS)
+              m_task->inf("On-sensor binning successful.");
+            else
+              m_task->err("On-sensor binning unsuccessful. Error %d", ret);
+          }
+
+        }
+        else
+          m_task->war("On-sensor binning not supported.");
+      }
 
       bool
       readFrame(Frame &frame_ret)
@@ -329,6 +399,10 @@ namespace Vision
       double m_fps;
       //! Pixel Clock.
       unsigned m_pixel_clock;
+      //! Bin vertical
+      bool m_bin_v;
+      //! Bin horizontal
+      bool m_bin_h;
       //! Will contain picture IDs for the above array.
       std::vector<INT> m_viSeqMemId;
       //! Will contain pointers to all image allocated memory areas.
@@ -341,6 +415,10 @@ namespace Vision
       int m_gain;
       //! Last timestamp.
       unsigned long long m_lastTS;
+      //! Frame height.
+      unsigned m_height;
+      //! Frame width.
+      unsigned m_width;
 
       void
       initializeCam(void)
@@ -415,6 +493,7 @@ namespace Vision
           m_task->err("Set Flash parameters unsuccessful. Error %d", tmp);
 
         setAOI(m_aoi);
+        setBinning(m_bin_v,m_bin_h);
         setPixelClock(m_pixel_clock);
         setFPS(m_fps);
         is_SetDisplayMode(m_cam, IS_SET_DM_DIB);
@@ -470,8 +549,8 @@ namespace Vision
               m_task->spew("Frame: %llu", frame.seqNum);
             }
 
-            frame.data = (char*) std::malloc(m_aoi.height * m_aoi.width * 2);
-            std::memcpy(frame.data, pBuffer, m_aoi.height * m_aoi.width * 2);
+            frame.data = (char*) std::malloc(m_height * m_width * 2);
+            std::memcpy(frame.data, pBuffer, m_height * m_width * 2);
             frame.id = nMemID;
             frame.timestamp = Clock::getSinceEpoch();
             frame.gainFactor = m_gain;
