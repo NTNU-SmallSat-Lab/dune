@@ -408,7 +408,7 @@ namespace Vision
       //! Will contain pointers to all image allocated memory areas.
       std::vector<char*> m_vpcSeqImgMem;
       //! Buffer Size
-      static const unsigned c_buf_len = 32;
+      static const unsigned c_buf_len = 64;
       //! Writer positions.
       unsigned m_write;
       //! Current gain factor.
@@ -549,8 +549,9 @@ namespace Vision
               m_task->spew("Frame: %llu", frame.seqNum);
             }
 
-            frame.data = (char*) std::malloc(m_height * m_width * 2);
-            std::memcpy(frame.data, pBuffer, m_height * m_width * 2);
+            //frame.data = (char*) std::malloc(m_height * m_width * 2);
+            //std::memcpy(frame.data, pBuffer, m_height * m_width * 2);
+            frame.data = pBuffer;
             frame.id = nMemID;
             frame.timestamp = Clock::getSinceEpoch();
             frame.gainFactor = m_gain;
@@ -562,7 +563,7 @@ namespace Vision
             }
 
             // do not forget to unlock the buffer, when all buffers are locked we cannot receive images any more
-            is_UnlockSeqBuf(m_cam, nMemID, pBuffer);
+            //is_UnlockSeqBuf(m_cam, nMemID, pBuffer);
           }
         }
       }

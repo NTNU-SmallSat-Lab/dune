@@ -192,6 +192,16 @@ namespace Vision
                                     m_args.binning_ah);
         m_capture->setGain(m_args.gain);
         m_capture->setExposure(m_args.exposure);
+        
+        int height = m_args.aoi.height;
+        int width  = m_args.aoi.width;
+        
+        if (m_args.binning_av)
+          height /= 2;
+        if (m_args.binning_ah)
+          width /= 2;
+        
+        m_image_cv = cv::Mat(height, width, CV_16UC1);
       }
 
       //! Release allocated resources.
@@ -253,18 +263,11 @@ namespace Vision
       void
       saveImage(Frame* frame)
       {
-
-        int height = m_args.aoi.height;
-        int width  = m_args.aoi.width;
+        std::memcpy(m_image_cv.ptr(), frame->data, m_image_cv.total() * m_image_cv.elemSize());
         
-        if (m_args.binning_av)
-          height /= 2;
-        if (m_args.binning_ah)
-          width /= 2;
-        
-        m_image_cv = cv::Mat(height, width, CV_16UC1);
-        //std::memcpy(m_image_cv.ptr(), frame->data, m_image_cv.total() * m_image_cv.elemSize());
-        m_image_cv.data = (uchar*) frame->data; //TODO: look into cv::imdecode
+        // do not forget to unlock the buffer, when all buffers are locked we cannot receive images any more
+        is_UnlockSeqBuf(m_cam, frame->id, frame->data);
+        //m_image_cv.data = (uchar*) frame->data; //TODO: look into cv::imdecode
 
         std::vector<int> compression_params;
         compression_params.push_back(cv::IMWRITE_PNG_COMPRESSION);
