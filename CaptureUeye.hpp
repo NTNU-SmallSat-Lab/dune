@@ -346,6 +346,18 @@ namespace Vision
         else
           m_task->war("On-sensor binning not supported.");
       }
+      
+      void
+      disableGamma(void)
+      {
+        int ret = is_SetHardwareGamma(m_cam, IS_SET_HW_GAMMA_OFF);
+        if (ret == IS_SUCCESS)
+          m_task->debug("Disabled HW Gamma.");
+        else
+          m_task->err("Disable HW Gamma unsuccessful. Error %d", ret);
+        
+        return;
+      }
 
       bool
       readFrame(Frame &frame_ret)
@@ -499,6 +511,7 @@ namespace Vision
         is_SetDisplayMode(m_cam, IS_SET_DM_DIB);
         //        is_SetImageMem(m_cam, m_imgMems[0], m_imgMemIds[0]);
         allocateMemory();
+        disableGamma();
 
         // Enable the FRAME event. Triggers when a frame is ready in memory.
         tmp = is_EnableEvent(m_cam, IS_SET_EVENT_FRAME);
@@ -524,7 +537,7 @@ namespace Vision
         while (!isStopping() && !stat)
         {
           // run the the image queue acquisition
-          stat = is_WaitForNextImage(m_cam, 1000, &pBuffer, &nMemID);
+          stat = is_WaitForNextImage(m_cam, 2000, &pBuffer, &nMemID);
           if (stat)
           {
             if (stat != IS_TIMED_OUT)
