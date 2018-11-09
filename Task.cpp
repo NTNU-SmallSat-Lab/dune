@@ -36,15 +36,6 @@
 // Local headers.
 #include <Vision/UEye/CaptureUeye.hpp>
 
-#include <opencv2/imgproc/imgproc.hpp>
-#include <opencv2/core/core.hpp>
-#include <opencv2/highgui/highgui.hpp>
-
-#if defined(DUNE_SYS_HAS_OPENCV2_IMGCODECS_HPP)
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/core/mat.hpp>
-#endif
-
 using DUNE_NAMESPACES;
 
 namespace Vision
@@ -70,16 +61,12 @@ namespace Vision
       int gain;
       //! Exposure time
       float exposure;
-      //! Digital binning factor
-      int binning_d;
       //! Analog vertical binning
       bool binning_av;
       //! Analog horizontal binning
       bool binning_ah;
       //! Pixel Clock index
       unsigned pixel_clock;
-      //! Save raw images
-      bool raw;
     };
 
     //! Device driver task.
@@ -96,8 +83,6 @@ namespace Vision
       CaptureUeye* m_capture;
       //! Frame
       Frame m_frame;
-      //! OpenCV frame.
-      cv::Mat m_image_cv;
 
       Task(const std::string& name, Tasks::Context& ctx):
       Tasks::Task(name, ctx),
@@ -150,12 +135,6 @@ namespace Vision
                 .defaultValue("")
                 .description("Path to Log Directory");
 
-        param("Digital Binning Factor", m_args.binning_d)
-                .defaultValue("1")
-                .minimumValue("1")
-                .maximumValue("16")
-                .description("Digital binning factor in the horizontal axis");
-
         param("On-sensor Bin Vertical", m_args.binning_av)
                 .defaultValue("false")
                 .description("On-sensor 2x binning in the vertical axis");
@@ -167,10 +146,6 @@ namespace Vision
         param("Pixel Clock", m_args.pixel_clock)
                 .minimumValue("0")
                 .description("Pixel Clock value in step number");
-
-        param("Save Raw", m_args.raw)
-                .defaultValue("false")
-                .description("Save images in raw format");
 
         bind<IMC::LoggingControl>(this);
       }
@@ -192,16 +167,6 @@ namespace Vision
                                     m_args.binning_ah);
         m_capture->setGain(m_args.gain);
         m_capture->setExposure(m_args.exposure);
-        
-        int height = m_args.aoi.height;
-        int width  = m_args.aoi.width;
-        
-        if (m_args.binning_av)
-          height /= 2;
-        if (m_args.binning_ah)
-          width /= 2;
-        
-        m_image_cv = cv::Mat(height, width, CV_16UC1);
       }
 
       //! Release allocated resources.
@@ -263,67 +228,14 @@ namespace Vision
       void
       saveImage(Frame* frame)
       {
-        std::memcpy(m_image_cv.ptr(), frame->data, m_image_cv.total() * m_image_cv.elemSize());
+        Path file = m_log_dir / String::str("%07llu_%0.4f_%03d.raw", frame->seqNum, frame->timestamp, frame->gainFactor);
+
+        std::ofstream outfile(file.c_str(), std::ofstream::out | std::ofstream::binary);
+
+        outfile.write(frame->data, m_args.aoi.width * m_args.aoi.height * 2);
+        outfile.close();
         
-        // do not forget to unlock the buffer, when all buffers are locked we cannot receive images any more
         is_UnlockSeqBuf(m_cam, frame->id, frame->data);
-        //m_image_cv.data = (uchar*) frame->data; //TODO: look into cv::imdecode
-
-        std::vector<int> compression_params;
-        compression_params.push_back(cv::IMWRITE_PNG_COMPRESSION);
-        compression_params.push_back(0);
-
-        if (m_args.raw)
-        {
-          Path file = m_log_dir / String::str("%07llu_%0.4f_%03d.raw", frame->seqNum, frame->timestamp, frame->gainFactor);
-
-          std::ofstream outfile(file.c_str(), std::ofstream::out | std::ofstream::binary);
-          
-          if (m_args.binning_d > 1)
-          {
-            cv::Mat image_cv_bin = binImage(m_image_cv, m_args.binning_d);
-            outfile.write((char*) image_cv_bin.data, image_cv_bin.total() * image_cv_bin.elemSize());
-            outfile.close();
-            
-            return;
-          }
-          
-          outfile.write((char*) m_image_cv.data, m_image_cv.total() * m_image_cv.elemSize());
-          outfile.close();
-        }
-        else
-        {
-          Path file = m_log_dir / String::str("%07llu_%0.4f_%03d.png", frame->seqNum, frame->timestamp, frame->gainFactor);
-
-          if (m_args.binning_d > 1)
-          {
-            cv::Mat image_cv_bin = binImage(m_image_cv, m_args.binning_d);
-
-            cv::imwrite(file.c_str(), image_cv_bin, compression_params);
-
-            return;
-          }
-
-          cv::imwrite(file.c_str(), m_image_cv, compression_params);
-        }
-      }
-      
-      cv::Mat
-      binImage(cv::Mat input, int binFactor)
-      {
-        cv::Mat output = cv::Mat(input.rows, input.cols/binFactor, CV_16UC1);
-        
-        for(int i = 0; i < output.cols; i++)
-        {
-          int startCol = i * binFactor;
-          cv::Mat tmpCol = cv::Mat(input.rows, 1, CV_64FC1);
-          cv::reduce(input.colRange(startCol, startCol + binFactor), tmpCol, 1, CV_REDUCE_SUM, CV_64FC1);
-          
-          tmpCol.convertTo(tmpCol, CV_16UC1);
-          tmpCol.copyTo(output.col(i));
-        }
-        
-        return output;
       }
       
       void

@@ -562,8 +562,6 @@ namespace Vision
               m_task->spew("Frame: %llu", frame.seqNum);
             }
 
-            //frame.data = (char*) std::malloc(m_height * m_width * 2);
-            //std::memcpy(frame.data, pBuffer, m_height * m_width * 2);
             frame.data = pBuffer;
             frame.id = nMemID;
             frame.timestamp = Clock::getSinceEpoch();
@@ -575,8 +573,6 @@ namespace Vision
               m_task->err("Buffer overrun!");
             }
 
-            // do not forget to unlock the buffer, when all buffers are locked we cannot receive images any more
-            //is_UnlockSeqBuf(m_cam, nMemID, pBuffer);
           }
         }
       }
