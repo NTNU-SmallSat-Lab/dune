@@ -28,14 +28,11 @@
 # Author: João Fortuna                                                     #
 ############################################################################
 
-if(UEYE)
-  dune_test_lib(ueye_api is_GetImageMem)
-  dune_test_header(ueye.h)
+dune_test_lib(ueye_api is_GetImageMem)
+dune_test_header(ueye.h)
 
-  if(DUNE_SYS_HAS_LIB_UEYE_API AND DUNE_SYS_HAS_UEYE_H)
-    set(DUNE_USING_UEYE 1 CACHE INTERNAL "ueye")
-  else(DUNE_SYS_HAS_LIB_UEYE_API AND DUNE_SYS_HAS_UEYE_H)
-    set(DUNE_USING_UEYE 0 CACHE INTERNAL "ueye")
-  endif(DUNE_SYS_HAS_LIB_UEYE_API AND DUNE_SYS_HAS_UEYE_H)
-endif(UEYE)
-
+if(DUNE_SYS_HAS_LIB_UEYE_API AND DUNE_SYS_HAS_UEYE_H)
+  set(DUNE_USING_UEYE 1 CACHE INTERNAL "ueye")
+else(DUNE_SYS_HAS_LIB_UEYE_API AND DUNE_SYS_HAS_UEYE_H)
+  set(DUNE_USING_UEYE 0 CACHE INTERNAL "ueye")
+endif(DUNE_SYS_HAS_LIB_UEYE_API AND DUNE_SYS_HAS_UEYE_H)
